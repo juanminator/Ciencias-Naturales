@@ -157,7 +157,7 @@ window.MathJax = {
 </div>
 </div>
 <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 text-sm text-amber-900">
-<strong>Condiciones de aplicación:</strong> durante la prueba se bloquean impresión, copia, menú contextual y atajos de guardado. Las respuestas y explicaciones solo se muestran al finalizar.
+<strong>Condiciones de aplicación:</strong> durante la prueba se bloquean impresión, copia, menú contextual y atajos de guardado. La prueba solo puede presentarse <strong>una vez por equipo</strong> y tu progreso se guarda automáticamente (si recargas la página, continúas donde ibas). La retroalimentación con las respuestas correctas solo la puede mostrar el docente con su clave al finalizar.
     </div>
 <form class="space-y-4" id="student-form" onsubmit="event.preventDefault(); startQuiz();">
 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -702,8 +702,9 @@ window.MathJax = {
 <p class="text-slate-400 text-sm mb-6">Desglose del desempeño según el Marco de Referencia.</p>
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
 <div class="bg-slate-800/80 backdrop-blur rounded-xl p-4 border border-slate-700 shadow-inner">
-<h4 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Puntaje Global</h4>
-<p class="text-4xl font-black text-white" id="total-score">0/10</p>
+<h4 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Calificación (0.0 – 5.0)</h4>
+<p class="text-4xl font-black text-white" id="total-score">0.0</p>
+<p class="text-slate-400 text-xs mt-1" id="score-detail"></p>
 </div>
 <div class="bg-slate-800/80 backdrop-blur rounded-xl p-4 border border-blue-900/50 border-b-4 border-b-blue-500">
 <h4 class="text-slate-400 text-xs font-bold uppercase tracking-wider mb-1">Uso Comprensivo</h4>
@@ -720,11 +721,25 @@ window.MathJax = {
 </div>
 </div>
 </div></div>
-<div class="flex flex-col sm:flex-row justify-center gap-3 mt-6 no-print">
+<div class="mt-4 text-center text-sm no-print" id="save-status"></div>
+
+<!-- Bloqueo de retroalimentación: requiere la clave del docente -->
+<div class="mt-6 bg-amber-50 border border-amber-200 rounded-2xl p-6 text-center no-print" id="feedback-lock">
+<i class="fa-solid fa-lock text-3xl text-amber-500 mb-3"></i>
+<h3 class="text-lg font-bold text-amber-900 mb-1">Retroalimentación protegida</h3>
+<p class="text-sm text-amber-800 mb-4">Tu calificación ya quedó registrada. Para ver las respuestas correctas y las explicaciones, el docente debe ingresar su clave.</p>
+<div class="flex flex-col sm:flex-row items-center justify-center gap-3 max-w-md mx-auto">
+<input class="w-full px-4 py-3 border border-amber-300 rounded-xl focus:ring-2 focus:ring-amber-500 outline-none" id="teacher-password" placeholder="Clave del docente" type="password"/>
+<button class="w-full sm:w-auto whitespace-nowrap bg-amber-600 hover:bg-amber-700 text-white font-bold px-6 py-3 rounded-xl" onclick="desbloquearRetro()" type="button"><i class="fa-solid fa-unlock mr-2"></i>Ver retroalimentación</button>
+</div>
+<p class="hidden mt-3 text-sm font-semibold text-rose-600" id="password-error"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Clave incorrecta. Inténtalo de nuevo.</p>
+</div>
+
+<!-- Controles visibles solo tras desbloquear -->
+<div class="flex flex-col sm:flex-row justify-center gap-3 mt-6 no-print hidden" id="review-controls">
 <button class="bg-white border border-slate-300 text-slate-700 font-bold px-6 py-3 rounded-xl hover:bg-slate-50" id="review-btn" onclick="toggleReview()" type="button"><i class="fa-solid fa-list-check mr-2"></i>Ver revisión detallada</button>
 <button class="bg-slate-900 text-white font-bold px-6 py-3 rounded-xl hover:bg-black" onclick="window.print()" type="button"><i class="fa-solid fa-file-pdf mr-2"></i>Imprimir / Guardar PDF</button>
 </div>
-<div class="mt-4 text-center text-sm no-print" id="save-status"></div>
 <div class="hidden mt-8 no-print" id="review-section">
 <div class="bg-indigo-50 border border-indigo-200 rounded-xl p-4 mb-5 text-indigo-900 text-sm"><strong>Revisión posterior:</strong> las respuestas ya están bloqueadas y no pueden modificarse.</div>
 <div id="review-cards"></div>
@@ -741,7 +756,54 @@ let studentData = {};
    GUARDADO EN GOOGLE SHEETS (Google Apps Script)
    Pega aquí la URL de tu app web publicada (termina en /exec)
    ============================================================ */
-const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxEaHx2rXdf-mHZx-ArdWCallHe6OjblISpn7Ogxk7gRlp4oLPKxTgc_L_Wkpj1lU3fBg/exec';
+const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/library/d/1F03GLJs4T-Zi02EDrRN_bybtPKEGNXPG7inGwon6fahvWQ9wnX00T97u/3';
+
+/* ============================================================
+   CLAVE DEL DOCENTE para ver la retroalimentación al final.
+   Cámbiala por la que quieras y compártela solo con el profesor.
+   ============================================================ */
+const CLAVE_PROFESOR = 'profe2025';
+
+/* ============================================================
+   PERSISTENCIA LOCAL (un solo intento por equipo + no reiniciar)
+   Los datos quedan guardados en el navegador del estudiante.
+   ============================================================ */
+const STORAGE_KEY = 'evalCienciasNaturales_v1';
+
+function guardarEstado() {
+    try {
+        const answers = {};
+        cards().forEach(card => {
+            const first = card.querySelector('input[type="radio"]');
+            const sel = card.querySelector('input[type="radio"]:checked');
+            if (first && sel) answers[first.name] = sel.value;
+        });
+        const estado = {
+            status: quizCompleted ? 'completed' : (quizStarted ? 'in_progress' : 'idle'),
+            student: studentData,
+            answers: answers,
+            current: currentQuestion,
+            tabChanges: tabChanges,
+            codigo: window._codigoResultado || null
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(estado));
+    } catch (e) { /* localStorage no disponible: se ignora */ }
+}
+
+function leerEstado() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) { return null; }
+}
+
+function aplicarRespuestas(answers) {
+    if (!answers) return;
+    Object.keys(answers).forEach(name => {
+        const input = document.querySelector('input[name="' + name + '"][value="' + answers[name] + '"]');
+        if (input) input.checked = true;
+    });
+}
 
 async function guardarResultados(datos) {
     const estado = document.getElementById('save-status');
@@ -792,6 +854,11 @@ function safeTypeset(elements) {
 }
 
 function startQuiz() {
+    const previo = leerEstado();
+    if (previo && previo.status === 'completed') {
+        mostrarBloqueo();
+        return;
+    }
     studentData = {
         apellido1: document.getElementById('apellido1').value.trim(),
         apellido2: document.getElementById('apellido2').value.trim(),
@@ -804,7 +871,21 @@ function startQuiz() {
     document.getElementById('quiz-section').classList.remove('hidden');
     document.getElementById('header-status').innerHTML = '<i class="fa-solid fa-pen-to-square"></i> Prueba en curso';
     showQuestion(0);
+    guardarEstado();
     window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function mostrarBloqueo() {
+    document.getElementById('intro-section').classList.add('hidden');
+    document.getElementById('quiz-section').classList.add('hidden');
+    const cs = document.getElementById('completed-section');
+    cs.classList.remove('hidden');
+    // Si hay resultados guardados, se reconstruye la pantalla final;
+    // si no, se muestra un aviso simple de intento único.
+    const st = leerEstado();
+    if (st && st.answers) {
+        restaurarFinalizado(st);
+    }
 }
 
 function showQuestion(index) {
@@ -832,6 +913,7 @@ function showQuestion(index) {
 
     document.getElementById('current-warning').classList.add('hidden');
     safeTypeset([allCards[currentQuestion]]);
+    guardarEstado();
     window.scrollTo({top: 0, behavior: 'smooth'});
 }
 
@@ -869,77 +951,13 @@ function finalizeQuiz() {
     document.body.classList.remove('quiz-locked');
     document.body.classList.add('prueba-completada');
 
-    let totalScore = 0;
-    const respuestas = [];
-    const stats = {
-        uso: {correct: 0, total: 4},
-        exp: {correct: 0, total: 2},
-        ind: {correct: 0, total: 4}
-    };
-
-    allCards.forEach(card => {
-        const selected = card.querySelector('input[type="radio"]:checked');
-        const feedback = card.querySelector('.feedback');
-        const correctVal = feedback.dataset.correct;
-        const category = card.dataset.cat;
-        const options = Array.from(card.querySelectorAll('input[type="radio"]'));
-        const labels = Array.from(card.querySelectorAll('.option-label'));
-
-        options.forEach(opt => opt.disabled = true);
-        labels.forEach(label => {
-            label.classList.remove('cursor-pointer', 'hover:bg-slate-50', 'group');
-            label.classList.add('cursor-default', 'opacity-60');
-        });
-
-        const selectedIndex = options.findIndex(opt => opt.value === selected.value);
-        const correctIndex = options.findIndex(opt => opt.value === correctVal);
-        const feedbackTitle = feedback.querySelector('.feedback-title');
-
-        respuestas.push({
-            n: parseInt(card.dataset.questionNumber, 10),
-            categoria: category,
-            elegida: selected.value,
-            correcta: correctVal,
-            acierto: selected.value === correctVal
-        });
-
-        if (selected.value === correctVal) {
-            totalScore++;
-            if (stats[category]) stats[category].correct++;
-            labels[selectedIndex].classList.remove('opacity-60');
-            labels[selectedIndex].classList.add('border-emerald-500', 'bg-emerald-50', 'ring-1', 'ring-emerald-500', 'opacity-100');
-            feedback.classList.remove('hidden');
-            feedback.classList.add('block', 'bg-emerald-50', 'border-emerald-200');
-            feedbackTitle.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-600 mr-2 text-lg"></i><span class="text-emerald-800">¡Correcto!</span>';
-        } else {
-            labels[selectedIndex].classList.remove('opacity-60');
-            labels[selectedIndex].classList.add('border-rose-400', 'bg-rose-50', 'opacity-100');
-            labels[correctIndex].classList.remove('opacity-60');
-            labels[correctIndex].classList.add('border-emerald-500', 'border-dashed', 'border-2', 'bg-emerald-50/50', 'opacity-100');
-            feedback.classList.remove('hidden');
-            feedback.classList.add('block', 'bg-rose-50', 'border-rose-200');
-            feedbackTitle.innerHTML = '<i class="fa-solid fa-circle-xmark text-rose-600 mr-2 text-lg"></i><span class="text-rose-800">Respuesta incorrecta. Explicación:</span>';
-        }
-        card.classList.remove('active-question');
-    });
-
-    document.getElementById('total-score').textContent = `${totalScore}/10`;
-    document.getElementById('cat-uso').textContent = `${stats.uso.correct}/${stats.uso.total}`;
-    document.getElementById('cat-exp').textContent = `${stats.exp.correct}/${stats.exp.total}`;
-    document.getElementById('cat-ind').textContent = `${stats.ind.correct}/${stats.ind.total}`;
-
-    document.getElementById('quiz-section').classList.add('hidden');
-    document.getElementById('completed-section').classList.remove('hidden');
-    document.getElementById('header-status').innerHTML = '<i class="fa-solid fa-circle-check"></i> Prueba finalizada';
-    document.getElementById('header-status').className = 'px-4 py-2 rounded-full font-bold text-sm bg-emerald-50 border border-emerald-200 text-emerald-700';
-
-    const fullName = `${studentData.apellido1} ${studentData.apellido2}, ${studentData.nombres}`.replace(/\s+/g, ' ').trim();
-    document.getElementById('student-summary').textContent = `${fullName} — ${studentData.programa}`;
     const codigo = generateCode();
-    document.getElementById('res-uuid').textContent = 'CÓDIGO: ' + codigo;
+    window._codigoResultado = codigo;
+    const resultados = calificarYBloquear();
+    mostrarPantallaFinal(resultados, codigo);
+    guardarEstado();
 
-    // Ordenar respuestas por número de pregunta y enviar a Google Sheets
-    respuestas.sort((a, b) => a.n - b.n);
+    // Enviar a Google Sheets (una sola vez, en el primer intento)
     guardarResultados({
         codigo: codigo,
         fecha: new Date().toISOString(),
@@ -947,25 +965,156 @@ function finalizeQuiz() {
         apellido2: studentData.apellido2,
         nombres: studentData.nombres,
         programa: studentData.programa,
-        puntaje: totalScore,
+        puntaje: resultados.totalScore,
         total: 10,
-        uso_correctas: stats.uso.correct,
-        uso_total: stats.uso.total,
-        exp_correctas: stats.exp.correct,
-        exp_total: stats.exp.total,
-        ind_correctas: stats.ind.correct,
-        ind_total: stats.ind.total,
+        nota: resultados.nota,
+        uso_correctas: resultados.stats.uso.correct,
+        uso_total: resultados.stats.uso.total,
+        exp_correctas: resultados.stats.exp.correct,
+        exp_total: resultados.stats.exp.total,
+        ind_correctas: resultados.stats.ind.correct,
+        ind_total: resultados.stats.ind.total,
         salidas_pestana: tabChanges,
-        respuestas: respuestas
+        respuestas: resultados.respuestas
     });
 
+    window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+// Calcula el puntaje y bloquea las opciones, SIN revelar cuáles son correctas.
+function calificarYBloquear() {
+    let totalScore = 0;
+    const respuestas = [];
+    const stats = {
+        uso: {correct: 0, total: 4},
+        exp: {correct: 0, total: 2},
+        ind: {correct: 0, total: 4}
+    };
+    cards().forEach(card => {
+        const selected = card.querySelector('input[type="radio"]:checked');
+        const feedback = card.querySelector('.feedback');
+        const correctVal = feedback.dataset.correct;
+        const category = card.dataset.cat;
+        const options = Array.from(card.querySelectorAll('input[type="radio"]'));
+        const labels = Array.from(card.querySelectorAll('.option-label'));
+        options.forEach(opt => opt.disabled = true);
+        labels.forEach(label => {
+            label.classList.remove('cursor-pointer', 'hover:bg-slate-50', 'group');
+            label.classList.add('cursor-default');
+        });
+        const acierto = !!selected && selected.value === correctVal;
+        if (acierto) {
+            totalScore++;
+            if (stats[category]) stats[category].correct++;
+        }
+        respuestas.push({
+            n: parseInt(card.dataset.questionNumber, 10),
+            categoria: category,
+            elegida: selected ? selected.value : '',
+            correcta: correctVal,
+            acierto: acierto
+        });
+        card.classList.remove('active-question');
+    });
+    respuestas.sort((a, b) => a.n - b.n);
+    const nota = ((totalScore / 10) * 5).toFixed(1);
+    return { totalScore, stats, respuestas, nota };
+}
+
+// Muestra la pantalla final: calificación 0.0-5.0, desglose y bloqueo de la retro.
+function mostrarPantallaFinal(resultados, codigo) {
+    const scoreEl = document.getElementById('total-score');
+    scoreEl.textContent = resultados.nota;
+    scoreEl.classList.remove('text-white', 'text-emerald-400', 'text-rose-400');
+    scoreEl.classList.add(parseFloat(resultados.nota) >= 3.0 ? 'text-emerald-400' : 'text-rose-400');
+    const detail = document.getElementById('score-detail');
+    if (detail) detail.textContent = `${resultados.totalScore} de 10 correctas`;
+    document.getElementById('cat-uso').textContent = `${resultados.stats.uso.correct}/${resultados.stats.uso.total}`;
+    document.getElementById('cat-exp').textContent = `${resultados.stats.exp.correct}/${resultados.stats.exp.total}`;
+    document.getElementById('cat-ind').textContent = `${resultados.stats.ind.correct}/${resultados.stats.ind.total}`;
+
+    document.getElementById('intro-section').classList.add('hidden');
+    document.getElementById('quiz-section').classList.add('hidden');
+    document.getElementById('completed-section').classList.remove('hidden');
+    document.getElementById('header-status').innerHTML = '<i class="fa-solid fa-circle-check"></i> Prueba finalizada';
+    document.getElementById('header-status').className = 'px-4 py-2 rounded-full font-bold text-sm bg-emerald-50 border border-emerald-200 text-emerald-700';
+
+    const fullName = `${studentData.apellido1} ${studentData.apellido2}, ${studentData.nombres}`.replace(/\s+/g, ' ').trim();
+    document.getElementById('student-summary').textContent = `${fullName} — ${studentData.programa}`;
+    document.getElementById('res-uuid').textContent = 'CÓDIGO: ' + codigo;
+
+    // La retroalimentación queda bloqueada hasta ingresar la clave del docente.
+    document.getElementById('feedback-lock').classList.remove('hidden');
+    document.getElementById('review-controls').classList.add('hidden');
+    safeTypeset([document.getElementById('completion-card')]);
+}
+
+// El docente ingresa su clave para revelar la retroalimentación detallada.
+function desbloquearRetro() {
+    const input = document.getElementById('teacher-password');
+    const errorEl = document.getElementById('password-error');
+    if (input.value !== CLAVE_PROFESOR) {
+        errorEl.classList.remove('hidden');
+        input.value = '';
+        return;
+    }
+    errorEl.classList.add('hidden');
+    revelarRetroalimentacion();
+    document.getElementById('feedback-lock').classList.add('hidden');
+    document.getElementById('review-controls').classList.remove('hidden');
+    const section = document.getElementById('review-section');
+    if (section.classList.contains('hidden')) toggleReview();
+}
+
+// Aplica el coloreado correcto/incorrecto y muestra las explicaciones.
+function revelarRetroalimentacion() {
     const reviewContainer = document.getElementById('review-cards');
-    allCards.forEach(card => {
+    cards().forEach(card => {
+        const selected = card.querySelector('input[type="radio"]:checked');
+        const feedback = card.querySelector('.feedback');
+        const correctVal = feedback.dataset.correct;
+        const options = Array.from(card.querySelectorAll('input[type="radio"]'));
+        const labels = Array.from(card.querySelectorAll('.option-label'));
+        const feedbackTitle = feedback.querySelector('.feedback-title');
+        const selectedIndex = options.findIndex(opt => selected && opt.value === selected.value);
+        const correctIndex = options.findIndex(opt => opt.value === correctVal);
+        labels.forEach(label => label.classList.add('opacity-60'));
+
+        if (selected && selected.value === correctVal) {
+            labels[selectedIndex].classList.remove('opacity-60');
+            labels[selectedIndex].classList.add('border-emerald-500', 'bg-emerald-50', 'ring-1', 'ring-emerald-500', 'opacity-100');
+            feedback.classList.remove('hidden');
+            feedback.classList.add('block', 'bg-emerald-50', 'border-emerald-200');
+            feedbackTitle.innerHTML = '<i class="fa-solid fa-circle-check text-emerald-600 mr-2 text-lg"></i><span class="text-emerald-800">¡Correcto!</span>';
+        } else {
+            if (selectedIndex >= 0) {
+                labels[selectedIndex].classList.remove('opacity-60');
+                labels[selectedIndex].classList.add('border-rose-400', 'bg-rose-50', 'opacity-100');
+            }
+            labels[correctIndex].classList.remove('opacity-60');
+            labels[correctIndex].classList.add('border-emerald-500', 'border-dashed', 'border-2', 'bg-emerald-50/50', 'opacity-100');
+            feedback.classList.remove('hidden');
+            feedback.classList.add('block', 'bg-rose-50', 'border-rose-200');
+            feedbackTitle.innerHTML = '<i class="fa-solid fa-circle-xmark text-rose-600 mr-2 text-lg"></i><span class="text-rose-800">Respuesta incorrecta. Explicación:</span>';
+        }
         card.classList.add('active-question');
         reviewContainer.appendChild(card);
     });
-    safeTypeset([document.getElementById('completed-section')]);
-    window.scrollTo({top: 0, behavior: 'smooth'});
+    safeTypeset([document.getElementById('review-section')]);
+}
+
+// Reconstruye la pantalla final tras recargar (prueba ya completada en este equipo).
+function restaurarFinalizado(estado) {
+    studentData = estado.student || {};
+    tabChanges = estado.tabChanges || 0;
+    quizCompleted = true;
+    quizStarted = false;
+    document.body.classList.add('prueba-completada');
+    aplicarRespuestas(estado.answers);
+    window._codigoResultado = estado.codigo || generateCode();
+    const resultados = calificarYBloquear();
+    mostrarPantallaFinal(resultados, window._codigoResultado);
+    // No se reenvía a Google Sheets: ya se guardó en el primer intento.
 }
 
 function generateCode() {
@@ -1034,6 +1183,35 @@ document.addEventListener('visibilitychange', () => {
 });
 
 document.addEventListener('DOMContentLoaded', () => {
+    // Autoguardado cada vez que el estudiante selecciona una opción.
+    const form = document.getElementById('quiz-form');
+    if (form) form.addEventListener('change', (e) => {
+        if (e.target && e.target.type === 'radio' && !quizCompleted) guardarEstado();
+    });
+
+    const estado = leerEstado();
+
+    // Caso 1: la prueba ya fue completada en este equipo -> pantalla final bloqueada.
+    if (estado && estado.status === 'completed') {
+        restaurarFinalizado(estado);
+        return;
+    }
+
+    // Caso 2: la prueba estaba en curso -> se restaura donde iba.
+    if (estado && estado.status === 'in_progress') {
+        studentData = estado.student || {};
+        tabChanges = estado.tabChanges || 0;
+        quizStarted = true;
+        document.body.classList.add('quiz-locked');
+        document.getElementById('intro-section').classList.add('hidden');
+        document.getElementById('quiz-section').classList.remove('hidden');
+        document.getElementById('header-status').innerHTML = '<i class="fa-solid fa-pen-to-square"></i> Prueba en curso';
+        aplicarRespuestas(estado.answers);
+        showQuestion(estado.current || 0);
+        return;
+    }
+
+    // Caso 3: inicio normal.
     document.querySelectorAll('#quiz-form .question-card').forEach((card, i) => {
         card.classList.toggle('active-question', i === 0);
     });
